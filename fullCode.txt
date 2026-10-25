@@ -1,0 +1,2956 @@
+Структура файлов
+BookStore.BLL
+ DTO
+  Book
+   BookCreateDto.cs
+   BookDto.cs
+   BookUpdateDto.cs
+  Order
+   CreateOrderDto.cs
+   OrderDto.cs
+   OrderItemDto.cs
+   OrderResultDto.cs
+  User
+   UserDto.cs
+ Services
+  BookService.cs
+  OrderService.cs
+  UserService.cs
+
+BookStore.DAL
+ Data
+  DatabaseContext.cs
+ Models
+  Author.cs
+  Book.cs
+  BookstoreContext.cs
+  Order.cs
+  OrderItem.cs
+  User.cs
+
+BookStore.PL
+ Forms
+  MainForm.cs
+  MainForm.Designer.cs
+ appsettings.json
+ Program.cs
+
+Program.cs
+using BookStore.PL.Forms;
+using Microsoft.Extensions.Configuration;
+using System;
+using System.Windows.Forms;
+
+namespace BookStore.PL
+{
+    internal static class Program
+    {
+        [STAThread]
+        static void Main()
+        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            var configuration = new ConfigurationBuilder()
+    .SetBasePath(Directory.GetCurrentDirectory())
+    .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
+    .Build();
+
+            // Строка подключения к базе данных
+            // string connectionString = configuration.GetConnectionString("BookStoreConnection");
+            string connectionString = "Host=localhost;Port=5432;Database=bookstore;Username=postgres;Password=12345";
+
+            // Создаем главную форму с передачей строки подключения
+            Application.Run(new MainForm(connectionString));
+        }
+    }
+}
+
+MainForm.cs
+using BookStore.BLL.DTO.Book;
+using BookStore.BLL.DTO.Order;
+using BookStore.BLL.DTO.User;
+using BookStore.BLL.Services;
+using System;
+using System.Collections.Generic;
+using System.Data;
+using System.Drawing;
+using System.Linq;
+using System.Windows.Forms;
+
+namespace BookStore.PL.Forms
+{
+    public partial class MainForm : Form
+    {
+        private readonly BookService _bookService;
+        private readonly OrderService _orderService;
+        private readonly UserService _userService;
+
+        private UserDto? _currentUser;
+        private readonly List<CartItem> _cart = new List<CartItem>();
+        private bool _isEditMode = false;
+        private int _editingBookId = 0;
+
+        public MainForm(string connectionString)
+        {
+            _bookService = new BookService(connectionString);
+            _orderService = new OrderService(connectionString);
+            _userService = new UserService(connectionString);
+
+            InitializeComponent();
+            InitializeForm();
+        }
+
+        private void InitializeForm()
+        {
+            try
+            {
+                // Загружаем пользователя по умолчанию
+                var users = _userService.GetAllUsers();
+                _currentUser = users.FirstOrDefault();
+
+                if (_currentUser != null)
+                {
+                    lblCurrentUser.Text = $"Покупатель: {_currentUser.FullName}";
+                    lblCurrentUser.ForeColor = Color.Green;
+                }
+                else
+                {
+                    lblCurrentUser.Text = "Покупатель: не выбран";
+                    lblCurrentUser.ForeColor = Color.Red;
+                }
+
+                // Загружаем книги
+                LoadBooks();
+                InitializeGenreFilter();
+                InitializeAuthorsForManage();
+                UpdateCartDisplay();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка инициализации: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void LoadBooks()
+        {
+            try
+            {
+                var books = _bookService.GetAllBooks();
+                DisplayBooks(books);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки книг: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void DisplayBooks(List<BookDto> books)
+        {
+            var table = new DataTable();
+            table.Columns.Add("ID", typeof(int));
+            table.Columns.Add("Название", typeof(string));
+            table.Columns.Add("Автор", typeof(string));
+            table.Columns.Add("Цена", typeof(decimal));
+            table.Columns.Add("Жанр", typeof(string));
+            table.Columns.Add("Год", typeof(int));
+            table.Columns.Add("В наличии", typeof(int));
+            table.Columns.Add("Статус", typeof(string));
+
+            foreach (var book in books)
+            {
+                table.Rows.Add(
+                    book.Id,
+                    book.Title,
+                    book.AuthorName,
+                    book.Price,
+                    book.Genre ?? "",
+                    book.PublishedYear,
+                    book.StockQuantity ?? 0,
+                    book.Availability
+                );
+            }
+
+            dgvBooks.DataSource = table;
+            FormatBooksGrid();
+            lblBookCount.Text = $"Найдено книг: {books.Count}";
+        }
+
+        private void FormatBooksGrid()
+        {
+            if (dgvBooks.Columns.Count > 0)
+            {
+                dgvBooks.Columns["ID"].Visible = false;
+                dgvBooks.Columns["Цена"].DefaultCellStyle.Format = "N2";
+
+                foreach (DataGridViewRow row in dgvBooks.Rows)
+                {
+                    if (row.Cells["В наличии"]?.Value != null)
+                    {
+                        int stock = Convert.ToInt32(row.Cells["В наличии"].Value);
+                        if (stock == 0)
+                        {
+                            row.DefaultCellStyle.ForeColor = Color.Gray;
+                            row.DefaultCellStyle.BackColor = Color.LightGray;
+                        }
+                        else if (stock < 5)
+                        {
+                            row.DefaultCellStyle.ForeColor = Color.Orange;
+                        }
+                    }
+                }
+            }
+        }
+
+        private void InitializeGenreFilter()
+        {
+            try
+            {
+                cmbGenreFilter.Items.Clear();
+                cmbGenreFilter.Items.Add("Все жанры");
+
+                var genres = _bookService.GetAllGenres();
+                foreach (var genre in genres)
+                {
+                    cmbGenreFilter.Items.Add(genre);
+                }
+                cmbGenreFilter.SelectedIndex = 0;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки фильтров: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void InitializeAuthorsForManage()
+        {
+            try
+            {
+                var authors = _bookService.GetAllAuthors();
+                cmbBookAuthor.Items.Clear();
+                cmbBookAuthor.Items.AddRange(authors.ToArray());
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки авторов: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void UpdateCartDisplay()
+        {
+            var table = new DataTable();
+            table.Columns.Add("BookId", typeof(int));
+            table.Columns.Add("Title", typeof(string));
+            table.Columns.Add("Author", typeof(string));
+            table.Columns.Add("Price", typeof(decimal));
+            table.Columns.Add("Quantity", typeof(int));
+            table.Columns.Add("Subtotal", typeof(decimal));
+
+            foreach (var item in _cart)
+            {
+                table.Rows.Add(
+                    item.BookId,
+                    item.Title,
+                    item.Author,
+                    item.Price,
+                    item.Quantity,
+                    item.Subtotal
+                );
+            }
+
+            dgvCart.DataSource = table;
+
+            if (dgvCart.Columns.Count > 0)
+            {
+                dgvCart.Columns["BookId"].Visible = false;
+                dgvCart.Columns["Price"].DefaultCellStyle.Format = "N2";
+                dgvCart.Columns["Subtotal"].DefaultCellStyle.Format = "N2";
+            }
+
+            int totalItems = _cart.Sum(item => item.Quantity);
+            decimal totalAmount = _cart.Sum(item => item.Subtotal);
+
+            lblCartItems.Text = $"Товаров в корзине: {totalItems}";
+            lblCartTotal.Text = $"Общая сумма: {totalAmount:N2} руб.";
+
+            btnPlaceOrder.Enabled = _cart.Count > 0;
+        }
+
+        // Обработчики событий для вкладки Каталог
+        private void btnAddToCart_Click(object sender, EventArgs e)
+        {
+            if (dgvBooks.CurrentRow == null) return;
+
+            try
+            {
+                int bookId = Convert.ToInt32(dgvBooks.CurrentRow.Cells["ID"].Value);
+                var book = _bookService.GetBookById(bookId);
+
+                if (book == null)
+                {
+                    MessageBox.Show("Книга не найдена", "Ошибка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                if ((book.StockQuantity ?? 0) <= 0)
+                {
+                    MessageBox.Show("Эта книга временно отсутствует на складе",
+                        "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                // Проверяем, есть ли уже в корзине
+                var existingItem = _cart.FirstOrDefault(item => item.BookId == bookId);
+                if (existingItem != null)
+                {
+                    if (existingItem.Quantity < (book.StockQuantity ?? 0))
+                    {
+                        existingItem.Quantity++;
+                        existingItem.Subtotal = existingItem.Price * existingItem.Quantity;
+                    }
+                    else
+                    {
+                        MessageBox.Show($"Нельзя добавить больше книг. В наличии только {book.StockQuantity} шт.",
+                            "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                else
+                {
+                    _cart.Add(new CartItem
+                    {
+                        BookId = book.Id,
+                        Title = book.Title,
+                        Author = book.AuthorName,
+                        Price = book.Price,
+                        Quantity = 1,
+                        Subtotal = book.Price
+                    });
+                }
+
+                UpdateCartDisplay();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка добавления в корзину: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnRemoveFromCart_Click(object sender, EventArgs e)
+        {
+            if (dgvCart.CurrentRow == null) return;
+
+            try
+            {
+                int bookId = Convert.ToInt32(dgvCart.CurrentRow.Cells["BookId"].Value);
+                var cartItem = _cart.FirstOrDefault(item => item.BookId == bookId);
+
+                if (cartItem != null)
+                {
+                    if (cartItem.Quantity > 1)
+                    {
+                        cartItem.Quantity--;
+                        cartItem.Subtotal = cartItem.Price * cartItem.Quantity;
+                    }
+                    else
+                    {
+                        _cart.Remove(cartItem);
+                    }
+
+                    UpdateCartDisplay();
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка удаления из корзины: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnClearCart_Click(object sender, EventArgs e)
+        {
+            if (_cart.Count > 0)
+            {
+                var result = MessageBox.Show("Очистить корзину?", "Подтверждение",
+                    MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    _cart.Clear();
+                    UpdateCartDisplay();
+                }
+            }
+        }
+
+        private void btnPlaceOrder_Click(object sender, EventArgs e)
+        {
+            if (_currentUser == null)
+            {
+                MessageBox.Show("Пользователь не выбран", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+                return;
+            }
+
+            if (_cart.Count == 0)
+            {
+                MessageBox.Show("Корзина пуста", "Внимание",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                var orderDto = new CreateOrderDto
+                {
+                    UserId = _currentUser.Id,
+                    Items = _cart.Select(item => new OrderItemCreateDto
+                    {
+                        BookId = item.BookId,
+                        Quantity = item.Quantity,
+                        Price = item.Price
+                    }).ToList()
+                };
+
+                var result = _orderService.PlaceOrder(orderDto);
+
+                if (result.Success)
+                {
+                    MessageBox.Show(result.Message, "Заказ оформлен",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+
+                    _cart.Clear();
+                    UpdateCartDisplay();
+                    LoadBooks(); // Обновляем список книг
+                }
+                else
+                {
+                    MessageBox.Show(result.Message, "Ошибка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка оформления заказа: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnRefreshBooks_Click(object sender, EventArgs e)
+        {
+            LoadBooks();
+            InitializeGenreFilter();
+        }
+
+        private void txtBookSearch_TextChanged(object sender, EventArgs e)
+        {
+            SearchBooks();
+        }
+
+        private void cmbGenreFilter_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            SearchBooks();
+        }
+
+        private void SearchBooks()
+        {
+            try
+            {
+                string title = txtBookSearch.Text.Trim();
+                string genre = cmbGenreFilter.SelectedItem?.ToString();
+
+                if (string.IsNullOrEmpty(title) && (genre == "Все жанры" || string.IsNullOrEmpty(genre)))
+                {
+                    LoadBooks();
+                }
+                else
+                {
+                    var books = _bookService.SearchBooks(
+                        string.IsNullOrEmpty(title) ? null : title,
+                        null,
+                        genre == "Все жанры" ? null : genre
+                    );
+                    DisplayBooks(books);
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка поиска: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnViewAllBooks_Click(object sender, EventArgs e)
+        {
+            txtBookSearch.Clear();
+            cmbGenreFilter.SelectedIndex = 0;
+            LoadBooks();
+        }
+
+        // Обработчики событий для вкладки Поиск по автору
+        private void btnSearchAuthor_Click(object sender, EventArgs e)
+        {
+            SearchByAuthor();
+        }
+
+        private void SearchByAuthor()
+        {
+            try
+            {
+                string authorName = txtAuthorSearch.Text.Trim();
+                decimal minPrice = numMinPrice.Value;
+
+                if (string.IsNullOrEmpty(authorName))
+                {
+                    MessageBox.Show("Введите имя автора", "Внимание",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var books = _bookService.SearchBooks(
+                    title: null,
+                    author: authorName,
+                    genre: null
+                );
+
+                // Фильтруем по минимальной цене
+                books = books.Where(b => b.Price >= minPrice).ToList();
+
+                // Отображаем в специальном гриде
+                var table = new DataTable();
+                table.Columns.Add("ID", typeof(int));
+                table.Columns.Add("Название", typeof(string));
+                table.Columns.Add("Автор", typeof(string));
+                table.Columns.Add("Цена", typeof(decimal));
+                table.Columns.Add("Жанр", typeof(string));
+                table.Columns.Add("Год", typeof(int));
+                table.Columns.Add("В наличии", typeof(int));
+
+                foreach (var book in books)
+                {
+                    table.Rows.Add(
+                        book.Id,
+                        book.Title,
+                        book.AuthorName,
+                        book.Price,
+                        book.Genre ?? "",
+                        book.PublishedYear,
+                        book.StockQuantity ?? 0
+                    );
+                }
+
+                dgvAuthorSearch.DataSource = table;
+
+                if (dgvAuthorSearch.Columns.Count > 0)
+                {
+                    dgvAuthorSearch.Columns["ID"].Visible = false;
+                    dgvAuthorSearch.Columns["Цена"].DefaultCellStyle.Format = "N2";
+                }
+
+                lblSearchResult.Text = $"Найдено книг: {books.Count}";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка поиска по автору: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnAddFromSearchResults_Click(object sender, EventArgs e)
+        {
+            if (dgvAuthorSearch.CurrentRow == null)
+            {
+                MessageBox.Show("Выберите книгу", "Внимание",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                int bookId = Convert.ToInt32(dgvAuthorSearch.CurrentRow.Cells["ID"].Value);
+                var book = _bookService.GetBookById(bookId);
+
+                if (book == null)
+                {
+                    MessageBox.Show("Книга не найдена", "Ошибка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                if ((book.StockQuantity ?? 0) <= 0)
+                {
+                    MessageBox.Show("Эта книга временно отсутствует на складе",
+                        "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return;
+                }
+
+                var existingItem = _cart.FirstOrDefault(item => item.BookId == bookId);
+                if (existingItem != null)
+                {
+                    if (existingItem.Quantity < (book.StockQuantity ?? 0))
+                    {
+                        existingItem.Quantity++;
+                        existingItem.Subtotal = existingItem.Price * existingItem.Quantity;
+                    }
+                    else
+                    {
+                        MessageBox.Show($"Нельзя добавить больше книг. В наличии только {book.StockQuantity} шт.",
+                            "Внимание", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                        return;
+                    }
+                }
+                else
+                {
+                    _cart.Add(new CartItem
+                    {
+                        BookId = book.Id,
+                        Title = book.Title,
+                        Author = book.AuthorName,
+                        Price = book.Price,
+                        Quantity = 1,
+                        Subtotal = book.Price
+                    });
+                }
+
+                UpdateCartDisplay();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка добавления в корзину: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // Обработчики событий для вкладки Мои заказы
+        private void LoadUserOrders()
+        {
+            if (_currentUser == null) return;
+
+            try
+            {
+                var orders = _orderService.GetUserOrders(_currentUser.Id);
+
+                var table = new DataTable();
+                table.Columns.Add("ID", typeof(int));
+                table.Columns.Add("Дата", typeof(string));
+                table.Columns.Add("Время", typeof(string));
+                table.Columns.Add("Сумма", typeof(decimal));
+                table.Columns.Add("Статус", typeof(string));
+                table.Columns.Add("Товаров", typeof(int));
+
+                foreach (var order in orders)
+                {
+                    string dateStr = order.OrderDate.ToString("dd.MM.yyyy");
+                    string timeStr = order.OrderTime.ToString("HH:mm");
+
+                    table.Rows.Add(
+                        order.Id,
+                        dateStr,
+                        timeStr,
+                        order.TotalAmount,
+                        order.Status,
+                        order.Items.Count
+                    );
+                }
+
+                dgvOrders.DataSource = table;
+
+                if (dgvOrders.Columns.Count > 0)
+                {
+                    dgvOrders.Columns["Сумма"].DefaultCellStyle.Format = "N2";
+
+                    // Раскрашиваем статусы
+                    foreach (DataGridViewRow row in dgvOrders.Rows)
+                    {
+                        if (row.Cells["Статус"]?.Value != null)
+                        {
+                            string status = row.Cells["Статус"].Value.ToString();
+                            if (status == "Выполнен")
+                                row.DefaultCellStyle.ForeColor = Color.Green;
+                            else if (status == "Отменен")
+                                row.DefaultCellStyle.ForeColor = Color.Red;
+                            else if (status == "В обработке")
+                                row.DefaultCellStyle.ForeColor = Color.Blue;
+                        }
+                    }
+                }
+
+                lblOrderCount.Text = $"Заказов: {orders.Count}";
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки заказов: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnLoadOrders_Click(object sender, EventArgs e)
+        {
+            LoadUserOrders();
+        }
+
+        private void dgvOrders_SelectionChanged(object sender, EventArgs e)
+        {
+            if (dgvOrders.CurrentRow == null) return;
+
+            try
+            {
+                int orderId = Convert.ToInt32(dgvOrders.CurrentRow.Cells["ID"].Value);
+                var order = _orderService.GetOrderById(orderId);
+
+                if (order != null)
+                {
+                    var table = new DataTable();
+                    table.Columns.Add("Книга", typeof(string));
+                    table.Columns.Add("Автор", typeof(string));
+                    table.Columns.Add("Кол-во", typeof(int));
+                    table.Columns.Add("Цена", typeof(decimal));
+                    table.Columns.Add("Сумма", typeof(decimal));
+
+                    foreach (var item in order.Items)
+                    {
+                        table.Rows.Add(
+                            item.BookTitle,
+                            item.AuthorName,
+                            item.Quantity,
+                            item.UnitPrice,
+                            item.Subtotal ?? item.UnitPrice * item.Quantity
+                        );
+                    }
+
+                    dgvOrderDetails.DataSource = table;
+
+                    if (dgvOrderDetails.Columns.Count > 0)
+                    {
+                        dgvOrderDetails.Columns["Цена"].DefaultCellStyle.Format = "N2";
+                        dgvOrderDetails.Columns["Сумма"].DefaultCellStyle.Format = "N2";
+                    }
+
+                    lblDetailCount.Text = $"Позиций: {order.Items.Count}";
+                }
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки деталей заказа: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        // Обработчики событий для вкладки Управление книгами
+        private void LoadManageBooks()
+        {
+            try
+            {
+                var books = _bookService.GetAllBooks();
+
+                var table = new DataTable();
+                table.Columns.Add("ID", typeof(int));
+                table.Columns.Add("Название", typeof(string));
+                table.Columns.Add("Автор", typeof(string));
+                table.Columns.Add("Цена", typeof(decimal));
+                table.Columns.Add("Жанр", typeof(string));
+                table.Columns.Add("Год", typeof(int));
+                table.Columns.Add("В наличии", typeof(int));
+                table.Columns.Add("Статус", typeof(string));
+
+                foreach (var book in books)
+                {
+                    table.Rows.Add(
+                        book.Id,
+                        book.Title,
+                        book.AuthorName,
+                        book.Price,
+                        book.Genre ?? "",
+                        book.PublishedYear,
+                        book.StockQuantity ?? 0,
+                        book.Availability
+                    );
+                }
+
+                dgvManageBooks.DataSource = table;
+
+                if (dgvManageBooks.Columns.Count > 0)
+                {
+                    dgvManageBooks.Columns["ID"].Visible = false;
+                    dgvManageBooks.Columns["Цена"].DefaultCellStyle.Format = "N2";
+                }
+
+                InitializeAuthorsForManage();
+
+                lblManageStatus.Text = "Готов к работе";
+                lblManageStatus.ForeColor = Color.Green;
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки книг для управления: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void EnableEditMode(bool enable, bool isNew = false)
+        {
+            groupBoxBookDetails.Enabled = enable;
+            btnSaveBook.Enabled = enable;
+            btnCancelEdit.Enabled = enable;
+
+            if (enable)
+            {
+                btnAddNewBook.Enabled = false;
+                btnEditBook.Enabled = false;
+                btnDeleteBook.Enabled = false;
+
+                if (isNew)
+                {
+                    ClearBookForm();
+                    _isEditMode = false;
+                    _editingBookId = 0;
+                    lblManageStatus.Text = "Режим добавления новой книги";
+                    lblManageStatus.ForeColor = Color.Blue;
+                }
+                else
+                {
+                    _isEditMode = true;
+                    lblManageStatus.Text = "Режим редактирования книги";
+                    lblManageStatus.ForeColor = Color.Orange;
+                }
+            }
+            else
+            {
+                btnAddNewBook.Enabled = true;
+                btnEditBook.Enabled = true;
+                btnDeleteBook.Enabled = true;
+                _isEditMode = false;
+                _editingBookId = 0;
+                ClearBookForm();
+                lblManageStatus.Text = "Готов к работе";
+                lblManageStatus.ForeColor = Color.Green;
+            }
+        }
+
+        private void ClearBookForm()
+        {
+            txtBookTitle.Clear();
+            numBookPrice.Value = 0;
+            if (cmbBookAuthor.Items.Count > 0)
+                cmbBookAuthor.SelectedIndex = 0;
+            numPublishedYear.Value = DateTime.Now.Year;
+            txtBookGenre.Clear();
+            numStockQuantity.Value = 1;
+        }
+
+        private void btnAddNewBook_Click(object sender, EventArgs e)
+        {
+            EnableEditMode(true, true);
+        }
+
+        private void btnEditBook_Click(object sender, EventArgs e)
+        {
+            if (dgvManageBooks.CurrentRow == null)
+            {
+                MessageBox.Show("Выберите книгу для редактирования", "Внимание",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            try
+            {
+                int bookId = Convert.ToInt32(dgvManageBooks.CurrentRow.Cells["ID"].Value);
+                var book = _bookService.GetBookById(bookId);
+
+                if (book == null)
+                {
+                    MessageBox.Show("Книга не найдена", "Ошибка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return;
+                }
+
+                _editingBookId = book.Id;
+                txtBookTitle.Text = book.Title;
+                numBookPrice.Value = book.Price;
+                cmbBookAuthor.Text = book.AuthorName;
+                numPublishedYear.Value = book.PublishedYear;
+                txtBookGenre.Text = book.Genre ?? "";
+                numStockQuantity.Value = book.StockQuantity ?? 1;
+
+                EnableEditMode(true, false);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка загрузки данных книги: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnDeleteBook_Click(object sender, EventArgs e)
+        {
+            if (dgvManageBooks.CurrentRow == null)
+            {
+                MessageBox.Show("Выберите книгу для удаления", "Внимание",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
+
+            var result = MessageBox.Show("Вы уверены, что хотите удалить выбранную книгу?",
+                "Подтверждение удаления", MessageBoxButtons.YesNo, MessageBoxIcon.Question);
+
+            if (result == DialogResult.Yes)
+            {
+                try
+                {
+                    int bookId = Convert.ToInt32(dgvManageBooks.CurrentRow.Cells["ID"].Value);
+                    bool success = _bookService.DeleteBook(bookId);
+
+                    if (success)
+                    {
+                        MessageBox.Show("Книга успешно удалена!", "Успех",
+                            MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        LoadManageBooks();
+                        LoadBooks(); // Обновляем основной каталог
+                    }
+                    else
+                    {
+                        MessageBox.Show("Не удалось удалить книгу", "Ошибка",
+                            MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show($"Ошибка удаления книги: {ex.Message}", "Ошибка",
+                        MessageBoxButtons.OK, MessageBoxIcon.Error);
+                }
+            }
+        }
+
+        private void btnSaveBook_Click(object sender, EventArgs e)
+        {
+            SaveBook();
+        }
+
+        private void SaveBook()
+        {
+            if (string.IsNullOrWhiteSpace(txtBookTitle.Text))
+            {
+                MessageBox.Show("Введите название книги", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                txtBookTitle.Focus();
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(cmbBookAuthor.Text))
+            {
+                MessageBox.Show("Выберите автора", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                cmbBookAuthor.Focus();
+                return;
+            }
+
+            try
+            {
+                if (_isEditMode && _editingBookId > 0)
+                {
+                    var bookDto = new BookUpdateDto
+                    {
+                        Id = _editingBookId,
+                        Title = txtBookTitle.Text,
+                        AuthorName = cmbBookAuthor.Text,
+                        Price = numBookPrice.Value,
+                        Genre = txtBookGenre.Text,
+                        PublishedYear = (int)numPublishedYear.Value,
+                        StockQuantity = (int)numStockQuantity.Value
+                    };
+
+                    var updatedBook = _bookService.UpdateBook(bookDto);
+                    MessageBox.Show($"Книга '{updatedBook.Title}' успешно обновлена!", "Успех",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+                else
+                {
+                    var bookDto = new BookCreateDto
+                    {
+                        Title = txtBookTitle.Text,
+                        AuthorName = cmbBookAuthor.Text,
+                        Price = numBookPrice.Value,
+                        Genre = txtBookGenre.Text,
+                        PublishedYear = (int)numPublishedYear.Value,
+                        StockQuantity = (int)numStockQuantity.Value
+                    };
+
+                    var createdBook = _bookService.AddBook(bookDto);
+                    MessageBox.Show($"Книга '{createdBook.Title}' успешно добавлена! ID: {createdBook.Id}", "Успех",
+                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                }
+
+                EnableEditMode(false);
+                LoadManageBooks();
+                LoadBooks(); // Обновляем основной каталог
+                InitializeGenreFilter(); // Обновляем фильтры
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show($"Ошибка сохранения книги: {ex.Message}", "Ошибка",
+                    MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        private void btnCancelEdit_Click(object sender, EventArgs e)
+        {
+            EnableEditMode(false);
+        }
+
+        private void btnRefreshManage_Click(object sender, EventArgs e)
+        {
+            LoadManageBooks();
+            EnableEditMode(false);
+        }
+
+        private void dgvManageBooks_SelectionChanged(object sender, EventArgs e)
+        {
+            if (_isEditMode && dgvManageBooks.CurrentRow != null)
+            {
+                var result = MessageBox.Show("Сохранить текущие изменения?", "Внимание",
+                    MessageBoxButtons.YesNoCancel, MessageBoxIcon.Question);
+
+                if (result == DialogResult.Yes)
+                {
+                    SaveBook();
+                }
+                else if (result == DialogResult.No)
+                {
+                    EnableEditMode(false);
+                }
+                // Если Cancel - ничего не делаем
+            }
+        }
+
+        // Обработчики событий переключения вкладок
+        private void tabControl_SelectedIndexChanged(object sender, EventArgs e)
+        {
+            switch (tabControl.SelectedIndex)
+            {
+                case 0: // Каталог
+                    LoadBooks();
+                    InitializeGenreFilter();
+                    break;
+                case 1: // Мои заказы
+                    LoadUserOrders();
+                    break;
+                case 2: // Поиск по автору
+                    txtAuthorSearch.Clear();
+                    dgvAuthorSearch.DataSource = null;
+                    lblSearchResult.Text = "Найдено книг: 0";
+                    break;
+                case 3: // Управление книгами
+                    LoadManageBooks();
+                    EnableEditMode(false);
+                    break;
+            }
+        }
+
+        // Вспомогательные методы
+        private void dgvBooks_SelectionChanged(object sender, EventArgs e)
+        {
+        }
+        private void txtAuthorSearch_TextChanged(object sender, EventArgs e)
+        {
+        }
+        private void txtAuthorSearch_KeyDown(object sender, EventArgs e)
+        {
+        }
+        private void dgvAuthorSearch_CellDoubleClick(object sender, DataGridViewCellEventArgs e)
+        {
+            if (e.RowIndex >= 0)
+            {
+                btnAddFromSearchResults_Click(sender, e);
+            }
+        }
+
+        // Внутренний класс для корзины
+        private class CartItem
+        {
+            public int BookId { get; set; }
+            public string Title { get; set; } = string.Empty;
+            public string Author { get; set; } = string.Empty;
+            public decimal Price { get; set; }
+            public int Quantity { get; set; }
+            public decimal Subtotal { get; set; }
+        }
+    }
+}
+
+MainForm.Designer.cs
+using BookStore;
+using System.Drawing.Printing;
+using System.Windows.Forms;
+using System.Xml.Linq;
+using static System.Net.Mime.MediaTypeNames;
+namespace BookStore.PL.Forms
+{
+    partial class MainForm
+    {
+        private System.ComponentModel.IContainer components = null;
+        private TabControl tabControl;
+        private TabPage tabCatalog;
+        private TabPage tabMyOrders;
+        private TabPage tabProcedures;
+        private TabPage tabManageBooks;
+        private Label lblCurrentUser;
+        private DataGridView dgvBooks;
+        private TextBox txtBookSearch;
+        private Label label1;
+        private ComboBox cmbGenreFilter;
+        private Label label2;
+        private Label lblBookCount;
+        private Button btnRefreshBooks;
+        private Button btnAddToCart;
+        private DataGridView dgvCart;
+        private Label lblCartItems;
+        private Label lblCartTotal;
+        private Button btnRemoveFromCart;
+        private Button btnClearCart;
+        private Button btnPlaceOrder;
+        private DataGridView dgvOrders;
+        private Button btnLoadOrders;
+        private Label lblOrderCount;
+        private DataGridView dgvOrderDetails;
+        private Label lblDetailCount;
+        private TextBox txtAuthorSearch;
+        private Label label3;
+        private Button btnSearchAuthor;
+        private DataGridView dgvAuthorSearch;
+        private Label lblSearchResult;
+        private Panel panel1;
+        private Button btnAddFromSearchResults;
+        private Label label4;
+        private NumericUpDown numMinPrice;
+        private Button btnViewAllBooks;
+        private Panel panelManageBooks;
+        private DataGridView dgvManageBooks;
+        private Button btnDeleteBook;
+        private Button btnAddNewBook;
+        private GroupBox groupBoxBookDetails;
+        private TextBox txtBookTitle;
+        private Label label5;
+        private Label label6;
+        private NumericUpDown numBookPrice;
+        private Label label7;
+        private ComboBox cmbBookAuthor;
+        private Label label8;
+        private NumericUpDown numPublishedYear;
+        private Label label9;
+        private TextBox txtBookGenre;
+        private Label label10;
+        private NumericUpDown numStockQuantity;
+        private Button btnSaveBook;
+        private Button btnCancelEdit;
+        private Button btnRefreshManage;
+        private Label lblManageStatus;
+        private Button btnEditBook;
+
+        protected override void Dispose(bool disposing)
+        {
+            if (disposing && (components != null))
+            {
+                components.Dispose();
+            }
+            base.Dispose(disposing);
+        }
+
+        private void InitializeComponent()
+        {
+            tabControl = new TabControl();
+            tabCatalog = new TabPage();
+            btnViewAllBooks = new Button();
+            panel1 = new Panel();
+            btnPlaceOrder = new Button();
+            btnClearCart = new Button();
+            btnRemoveFromCart = new Button();
+            lblCartTotal = new Label();
+            lblCartItems = new Label();
+            dgvCart = new DataGridView();
+            btnAddToCart = new Button();
+            btnRefreshBooks = new Button();
+            lblBookCount = new Label();
+            cmbGenreFilter = new ComboBox();
+            label2 = new Label();
+            txtBookSearch = new TextBox();
+            label1 = new Label();
+            dgvBooks = new DataGridView();
+            tabMyOrders = new TabPage();
+            lblDetailCount = new Label();
+            dgvOrderDetails = new DataGridView();
+            lblOrderCount = new Label();
+            btnLoadOrders = new Button();
+            dgvOrders = new DataGridView();
+            tabProcedures = new TabPage();
+            btnAddFromSearchResults = new Button();
+            numMinPrice = new NumericUpDown();
+            label4 = new Label();
+            lblSearchResult = new Label();
+            dgvAuthorSearch = new DataGridView();
+            btnSearchAuthor = new Button();
+            label3 = new Label();
+            txtAuthorSearch = new TextBox();
+            tabManageBooks = new TabPage();
+            panelManageBooks = new Panel();
+            lblManageStatus = new Label();
+            btnRefreshManage = new Button();
+            btnCancelEdit = new Button();
+            btnSaveBook = new Button();
+            groupBoxBookDetails = new GroupBox();
+            numStockQuantity = new NumericUpDown();
+            label10 = new Label();
+            txtBookGenre = new TextBox();
+            label9 = new Label();
+            numPublishedYear = new NumericUpDown();
+            label8 = new Label();
+            cmbBookAuthor = new ComboBox();
+            label7 = new Label();
+            numBookPrice = new NumericUpDown();
+            label6 = new Label();
+            txtBookTitle = new TextBox();
+            label5 = new Label();
+            btnEditBook = new Button();
+            btnDeleteBook = new Button();
+            btnAddNewBook = new Button();
+            dgvManageBooks = new DataGridView();
+            lblCurrentUser = new Label();
+            tabControl.SuspendLayout();
+            tabCatalog.SuspendLayout();
+            panel1.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dgvCart).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)dgvBooks).BeginInit();
+            tabMyOrders.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)dgvOrderDetails).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)dgvOrders).BeginInit();
+            tabProcedures.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)numMinPrice).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)dgvAuthorSearch).BeginInit();
+            tabManageBooks.SuspendLayout();
+            panelManageBooks.SuspendLayout();
+            groupBoxBookDetails.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)numStockQuantity).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)numPublishedYear).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)numBookPrice).BeginInit();
+            ((System.ComponentModel.ISupportInitialize)dgvManageBooks).BeginInit();
+            SuspendLayout();
+            // 
+            // tabControl
+            // 
+            tabControl.Controls.Add(tabCatalog);
+            tabControl.Controls.Add(tabMyOrders);
+            tabControl.Controls.Add(tabProcedures);
+            tabControl.Controls.Add(tabManageBooks);
+            tabControl.Dock = DockStyle.Fill;
+            tabControl.Location = new Point(0, 46);
+            tabControl.Margin = new Padding(4, 5, 4, 5);
+            tabControl.Name = "tabControl";
+            tabControl.SelectedIndex = 0;
+            tabControl.Size = new Size(1600, 985);
+            tabControl.TabIndex = 0;
+            tabControl.SelectedIndexChanged += tabControl_SelectedIndexChanged;
+            // 
+            // tabCatalog
+            // 
+            tabCatalog.Controls.Add(btnViewAllBooks);
+            tabCatalog.Controls.Add(panel1);
+            tabCatalog.Controls.Add(btnAddToCart);
+            tabCatalog.Controls.Add(btnRefreshBooks);
+            tabCatalog.Controls.Add(lblBookCount);
+            tabCatalog.Controls.Add(cmbGenreFilter);
+            tabCatalog.Controls.Add(label2);
+            tabCatalog.Controls.Add(txtBookSearch);
+            tabCatalog.Controls.Add(label1);
+            tabCatalog.Controls.Add(dgvBooks);
+            tabCatalog.Location = new Point(4, 29);
+            tabCatalog.Margin = new Padding(4, 5, 4, 5);
+            tabCatalog.Name = "tabCatalog";
+            tabCatalog.Padding = new Padding(4, 5, 4, 5);
+            tabCatalog.Size = new Size(1592, 952);
+            tabCatalog.TabIndex = 0;
+            tabCatalog.Text = "Каталог книг";
+            tabCatalog.UseVisualStyleBackColor = true;
+            // 
+            // btnViewAllBooks
+            // 
+            btnViewAllBooks.Location = new Point(676, 96);
+            btnViewAllBooks.Margin = new Padding(4, 5, 4, 5);
+            btnViewAllBooks.Name = "btnViewAllBooks";
+            btnViewAllBooks.Size = new Size(173, 46);
+            btnViewAllBooks.TabIndex = 9;
+            btnViewAllBooks.Text = "Показать все";
+            btnViewAllBooks.UseVisualStyleBackColor = true;
+            btnViewAllBooks.Click += btnViewAllBooks_Click;
+            // 
+            // panel1
+            // 
+            panel1.BorderStyle = BorderStyle.FixedSingle;
+            panel1.Controls.Add(btnPlaceOrder);
+            panel1.Controls.Add(btnClearCart);
+            panel1.Controls.Add(btnRemoveFromCart);
+            panel1.Controls.Add(lblCartTotal);
+            panel1.Controls.Add(lblCartItems);
+            panel1.Controls.Add(dgvCart);
+            panel1.Dock = DockStyle.Right;
+            panel1.Location = new Point(1059, 5);
+            panel1.Margin = new Padding(4, 5, 4, 5);
+            panel1.Name = "panel1";
+            panel1.Size = new Size(529, 942);
+            panel1.TabIndex = 8;
+            // 
+            // btnPlaceOrder
+            // 
+            btnPlaceOrder.BackColor = Color.FromArgb(76, 175, 80);
+            btnPlaceOrder.FlatStyle = FlatStyle.Flat;
+            btnPlaceOrder.Font = new System.Drawing.Font("Microsoft Sans Serif", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            btnPlaceOrder.ForeColor = Color.White;
+            btnPlaceOrder.Location = new Point(13, 877);
+            btnPlaceOrder.Margin = new Padding(4, 5, 4, 5);
+            btnPlaceOrder.Name = "btnPlaceOrder";
+            btnPlaceOrder.Size = new Size(500, 54);
+            btnPlaceOrder.TabIndex = 5;
+            btnPlaceOrder.Text = "\U0001f6d2 ОФОРМИТЬ ЗАКАЗ";
+            btnPlaceOrder.UseVisualStyleBackColor = false;
+            btnPlaceOrder.Click += btnPlaceOrder_Click;
+            // 
+            // btnClearCart
+            // 
+            btnClearCart.Location = new Point(353, 823);
+            btnClearCart.Margin = new Padding(4, 5, 4, 5);
+            btnClearCart.Name = "btnClearCart";
+            btnClearCart.Size = new Size(160, 46);
+            btnClearCart.TabIndex = 4;
+            btnClearCart.Text = "Очистить корзину";
+            btnClearCart.UseVisualStyleBackColor = true;
+            btnClearCart.Click += btnClearCart_Click;
+            // 
+            // btnRemoveFromCart
+            // 
+            btnRemoveFromCart.Location = new Point(13, 823);
+            btnRemoveFromCart.Margin = new Padding(4, 5, 4, 5);
+            btnRemoveFromCart.Name = "btnRemoveFromCart";
+            btnRemoveFromCart.Size = new Size(180, 46);
+            btnRemoveFromCart.TabIndex = 3;
+            btnRemoveFromCart.Text = "- Убрать из корзины";
+            btnRemoveFromCart.UseVisualStyleBackColor = true;
+            btnRemoveFromCart.Click += btnRemoveFromCart_Click;
+            // 
+            // lblCartTotal
+            // 
+            lblCartTotal.Font = new System.Drawing.Font("Microsoft Sans Serif", 10F, FontStyle.Bold);
+            lblCartTotal.Location = new Point(13, 777);
+            lblCartTotal.Margin = new Padding(4, 0, 4, 0);
+            lblCartTotal.Name = "lblCartTotal";
+            lblCartTotal.Size = new Size(500, 38);
+            lblCartTotal.TabIndex = 2;
+            lblCartTotal.Text = "Общая сумма: 0 руб.";
+            lblCartTotal.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // lblCartItems
+            // 
+            lblCartItems.Dock = DockStyle.Top;
+            lblCartItems.Font = new System.Drawing.Font("Microsoft Sans Serif", 9.75F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            lblCartItems.Location = new Point(0, 0);
+            lblCartItems.Margin = new Padding(4, 0, 4, 0);
+            lblCartItems.Name = "lblCartItems";
+            lblCartItems.Size = new Size(527, 46);
+            lblCartItems.TabIndex = 1;
+            lblCartItems.Text = "\U0001f6d2 КОРЗИНА (0 товаров)";
+            lblCartItems.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // dgvCart
+            // 
+            dgvCart.AllowUserToAddRows = false;
+            dgvCart.AllowUserToDeleteRows = false;
+            dgvCart.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dgvCart.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvCart.Location = new Point(13, 54);
+            dgvCart.Margin = new Padding(4, 5, 4, 5);
+            dgvCart.Name = "dgvCart";
+            dgvCart.ReadOnly = true;
+            dgvCart.RowHeadersVisible = false;
+            dgvCart.RowHeadersWidth = 51;
+            dgvCart.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvCart.Size = new Size(500, 715);
+            dgvCart.TabIndex = 0;
+            // 
+            // btnAddToCart
+            // 
+            btnAddToCart.BackColor = Color.FromArgb(33, 150, 243);
+            btnAddToCart.FlatStyle = FlatStyle.Flat;
+            btnAddToCart.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            btnAddToCart.ForeColor = Color.White;
+            btnAddToCart.Location = new Point(867, 92);
+            btnAddToCart.Margin = new Padding(4, 5, 4, 5);
+            btnAddToCart.Name = "btnAddToCart";
+            btnAddToCart.Size = new Size(173, 54);
+            btnAddToCart.TabIndex = 7;
+            btnAddToCart.Text = "+ В корзину";
+            btnAddToCart.UseVisualStyleBackColor = false;
+            btnAddToCart.Click += btnAddToCart_Click;
+            // 
+            // btnRefreshBooks
+            // 
+            btnRefreshBooks.Location = new Point(867, 31);
+            btnRefreshBooks.Margin = new Padding(4, 5, 4, 5);
+            btnRefreshBooks.Name = "btnRefreshBooks";
+            btnRefreshBooks.Size = new Size(173, 46);
+            btnRefreshBooks.TabIndex = 6;
+            btnRefreshBooks.Text = "Обновить";
+            btnRefreshBooks.UseVisualStyleBackColor = true;
+            btnRefreshBooks.Click += btnRefreshBooks_Click;
+            // 
+            // lblBookCount
+            // 
+            lblBookCount.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            lblBookCount.Location = new Point(13, 92);
+            lblBookCount.Margin = new Padding(4, 0, 4, 0);
+            lblBookCount.Name = "lblBookCount";
+            lblBookCount.Size = new Size(200, 38);
+            lblBookCount.TabIndex = 5;
+            lblBookCount.Text = "Найдено книг: 0";
+            lblBookCount.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // cmbGenreFilter
+            // 
+            cmbGenreFilter.DropDownStyle = ComboBoxStyle.DropDownList;
+            cmbGenreFilter.FormattingEnabled = true;
+            cmbGenreFilter.Location = new Point(560, 38);
+            cmbGenreFilter.Margin = new Padding(4, 5, 4, 5);
+            cmbGenreFilter.Name = "cmbGenreFilter";
+            cmbGenreFilter.Size = new Size(265, 28);
+            cmbGenreFilter.TabIndex = 4;
+            cmbGenreFilter.SelectedIndexChanged += cmbGenreFilter_SelectedIndexChanged;
+            // 
+            // label2
+            // 
+            label2.AutoSize = true;
+            label2.Location = new Point(493, 43);
+            label2.Margin = new Padding(4, 0, 4, 0);
+            label2.Name = "label2";
+            label2.Size = new Size(51, 20);
+            label2.TabIndex = 3;
+            label2.Text = "Жанр:";
+            // 
+            // txtBookSearch
+            // 
+            txtBookSearch.Location = new Point(187, 38);
+            txtBookSearch.Margin = new Padding(4, 5, 4, 5);
+            txtBookSearch.Name = "txtBookSearch";
+            txtBookSearch.Size = new Size(265, 27);
+            txtBookSearch.TabIndex = 2;
+            txtBookSearch.TextChanged += txtBookSearch_TextChanged;
+            // 
+            // label1
+            // 
+            label1.AutoSize = true;
+            label1.Location = new Point(13, 43);
+            label1.Margin = new Padding(4, 0, 4, 0);
+            label1.Name = "label1";
+            label1.Size = new Size(151, 20);
+            label1.TabIndex = 1;
+            label1.Text = "Поиск по названию:";
+            // 
+            // dgvBooks
+            // 
+            dgvBooks.AllowUserToAddRows = false;
+            dgvBooks.AllowUserToDeleteRows = false;
+            dgvBooks.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dgvBooks.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvBooks.Location = new Point(13, 154);
+            dgvBooks.Margin = new Padding(4, 5, 4, 5);
+            dgvBooks.Name = "dgvBooks";
+            dgvBooks.ReadOnly = true;
+            dgvBooks.RowHeadersVisible = false;
+            dgvBooks.RowHeadersWidth = 51;
+            dgvBooks.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvBooks.Size = new Size(1027, 769);
+            dgvBooks.TabIndex = 0;
+            dgvBooks.SelectionChanged += dgvBooks_SelectionChanged;
+            // 
+            // tabMyOrders
+            // 
+            tabMyOrders.Controls.Add(lblDetailCount);
+            tabMyOrders.Controls.Add(dgvOrderDetails);
+            tabMyOrders.Controls.Add(lblOrderCount);
+            tabMyOrders.Controls.Add(btnLoadOrders);
+            tabMyOrders.Controls.Add(dgvOrders);
+            tabMyOrders.Location = new Point(4, 29);
+            tabMyOrders.Margin = new Padding(4, 5, 4, 5);
+            tabMyOrders.Name = "tabMyOrders";
+            tabMyOrders.Padding = new Padding(4, 5, 4, 5);
+            tabMyOrders.Size = new Size(1592, 952);
+            tabMyOrders.TabIndex = 1;
+            tabMyOrders.Text = "Мои заказы";
+            tabMyOrders.UseVisualStyleBackColor = true;
+            // 
+            // lblDetailCount
+            // 
+            lblDetailCount.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            lblDetailCount.Location = new Point(800, 15);
+            lblDetailCount.Margin = new Padding(4, 0, 4, 0);
+            lblDetailCount.Name = "lblDetailCount";
+            lblDetailCount.Size = new Size(240, 38);
+            lblDetailCount.TabIndex = 4;
+            lblDetailCount.Text = "Позиций: 0";
+            lblDetailCount.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // dgvOrderDetails
+            // 
+            dgvOrderDetails.AllowUserToAddRows = false;
+            dgvOrderDetails.AllowUserToDeleteRows = false;
+            dgvOrderDetails.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dgvOrderDetails.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvOrderDetails.Location = new Point(800, 62);
+            dgvOrderDetails.Margin = new Padding(4, 5, 4, 5);
+            dgvOrderDetails.Name = "dgvOrderDetails";
+            dgvOrderDetails.ReadOnly = true;
+            dgvOrderDetails.RowHeadersVisible = false;
+            dgvOrderDetails.RowHeadersWidth = 51;
+            dgvOrderDetails.Size = new Size(773, 862);
+            dgvOrderDetails.TabIndex = 3;
+            // 
+            // lblOrderCount
+            // 
+            lblOrderCount.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            lblOrderCount.Location = new Point(13, 15);
+            lblOrderCount.Margin = new Padding(4, 0, 4, 0);
+            lblOrderCount.Name = "lblOrderCount";
+            lblOrderCount.Size = new Size(240, 38);
+            lblOrderCount.TabIndex = 2;
+            lblOrderCount.Text = "Заказов: 0";
+            lblOrderCount.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // btnLoadOrders
+            // 
+            btnLoadOrders.Location = new Point(267, 15);
+            btnLoadOrders.Margin = new Padding(4, 5, 4, 5);
+            btnLoadOrders.Name = "btnLoadOrders";
+            btnLoadOrders.Size = new Size(160, 38);
+            btnLoadOrders.TabIndex = 1;
+            btnLoadOrders.Text = "Загрузить заказы";
+            btnLoadOrders.UseVisualStyleBackColor = true;
+            btnLoadOrders.Click += btnLoadOrders_Click;
+            // 
+            // dgvOrders
+            // 
+            dgvOrders.AllowUserToAddRows = false;
+            dgvOrders.AllowUserToDeleteRows = false;
+            dgvOrders.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dgvOrders.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvOrders.Location = new Point(13, 62);
+            dgvOrders.Margin = new Padding(4, 5, 4, 5);
+            dgvOrders.Name = "dgvOrders";
+            dgvOrders.ReadOnly = true;
+            dgvOrders.RowHeadersVisible = false;
+            dgvOrders.RowHeadersWidth = 51;
+            dgvOrders.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvOrders.Size = new Size(773, 862);
+            dgvOrders.TabIndex = 0;
+            dgvOrders.SelectionChanged += dgvOrders_SelectionChanged;
+            // 
+            // tabProcedures
+            // 
+            tabProcedures.Controls.Add(btnAddFromSearchResults);
+            tabProcedures.Controls.Add(numMinPrice);
+            tabProcedures.Controls.Add(label4);
+            tabProcedures.Controls.Add(lblSearchResult);
+            tabProcedures.Controls.Add(dgvAuthorSearch);
+            tabProcedures.Controls.Add(btnSearchAuthor);
+            tabProcedures.Controls.Add(label3);
+            tabProcedures.Controls.Add(txtAuthorSearch);
+            tabProcedures.Location = new Point(4, 29);
+            tabProcedures.Margin = new Padding(4, 5, 4, 5);
+            tabProcedures.Name = "tabProcedures";
+            tabProcedures.Size = new Size(1592, 952);
+            tabProcedures.TabIndex = 2;
+            tabProcedures.Text = "Поиск по автору";
+            tabProcedures.UseVisualStyleBackColor = true;
+            // 
+            // btnAddFromSearchResults
+            // 
+            btnAddFromSearchResults.Location = new Point(933, 23);
+            btnAddFromSearchResults.Margin = new Padding(4, 5, 4, 5);
+            btnAddFromSearchResults.Name = "btnAddFromSearchResults";
+            btnAddFromSearchResults.Size = new Size(200, 38);
+            btnAddFromSearchResults.TabIndex = 8;
+            btnAddFromSearchResults.Text = "Добавить в корзину";
+            btnAddFromSearchResults.UseVisualStyleBackColor = true;
+            btnAddFromSearchResults.Click += btnAddFromSearchResults_Click;
+            // 
+            // numMinPrice
+            // 
+            numMinPrice.DecimalPlaces = 2;
+            numMinPrice.Increment = new decimal(new int[] { 100, 0, 0, 0 });
+            numMinPrice.Location = new Point(813, 26);
+            numMinPrice.Margin = new Padding(4, 5, 4, 5);
+            numMinPrice.Maximum = new decimal(new int[] { 100000, 0, 0, 0 });
+            numMinPrice.Name = "numMinPrice";
+            numMinPrice.Size = new Size(107, 27);
+            numMinPrice.TabIndex = 7;
+            // 
+            // label4
+            // 
+            label4.AutoSize = true;
+            label4.Location = new Point(707, 31);
+            label4.Margin = new Padding(4, 0, 4, 0);
+            label4.Name = "label4";
+            label4.Size = new Size(84, 20);
+            label4.TabIndex = 6;
+            label4.Text = "Мин. цена:";
+            // 
+            // lblSearchResult
+            // 
+            lblSearchResult.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            lblSearchResult.Location = new Point(13, 77);
+            lblSearchResult.Margin = new Padding(4, 0, 4, 0);
+            lblSearchResult.Name = "lblSearchResult";
+            lblSearchResult.Size = new Size(1560, 38);
+            lblSearchResult.TabIndex = 4;
+            lblSearchResult.Text = "Найдено книг: 0";
+            lblSearchResult.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // dgvAuthorSearch
+            // 
+            dgvAuthorSearch.AllowUserToAddRows = false;
+            dgvAuthorSearch.AllowUserToDeleteRows = false;
+            dgvAuthorSearch.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dgvAuthorSearch.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvAuthorSearch.Location = new Point(13, 123);
+            dgvAuthorSearch.Margin = new Padding(4, 5, 4, 5);
+            dgvAuthorSearch.Name = "dgvAuthorSearch";
+            dgvAuthorSearch.ReadOnly = true;
+            dgvAuthorSearch.RowHeadersVisible = false;
+            dgvAuthorSearch.RowHeadersWidth = 51;
+            dgvAuthorSearch.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvAuthorSearch.Size = new Size(1560, 800);
+            dgvAuthorSearch.TabIndex = 3;
+            dgvAuthorSearch.CellDoubleClick += dgvAuthorSearch_CellDoubleClick;
+            // 
+            // btnSearchAuthor
+            // 
+            btnSearchAuthor.Location = new Point(1147, 23);
+            btnSearchAuthor.Margin = new Padding(4, 5, 4, 5);
+            btnSearchAuthor.Name = "btnSearchAuthor";
+            btnSearchAuthor.Size = new Size(160, 38);
+            btnSearchAuthor.TabIndex = 2;
+            btnSearchAuthor.Text = "Найти книги";
+            btnSearchAuthor.UseVisualStyleBackColor = true;
+            btnSearchAuthor.Click += btnSearchAuthor_Click;
+            // 
+            // label3
+            // 
+            label3.AutoSize = true;
+            label3.Location = new Point(13, 31);
+            label3.Margin = new Padding(4, 0, 4, 0);
+            label3.Name = "label3";
+            label3.Size = new Size(152, 20);
+            label3.TabIndex = 1;
+            label3.Text = "Введите имя автора:";
+            // 
+            // txtAuthorSearch
+            // 
+            txtAuthorSearch.Location = new Point(173, 26);
+            txtAuthorSearch.Margin = new Padding(4, 5, 4, 5);
+            txtAuthorSearch.Name = "txtAuthorSearch";
+            txtAuthorSearch.Size = new Size(332, 27);
+            txtAuthorSearch.TabIndex = 0;
+            txtAuthorSearch.TextChanged += txtAuthorSearch_TextChanged;
+            txtAuthorSearch.KeyDown += txtAuthorSearch_KeyDown;
+            // 
+            // tabManageBooks
+            // 
+            tabManageBooks.Controls.Add(panelManageBooks);
+            tabManageBooks.Location = new Point(4, 29);
+            tabManageBooks.Margin = new Padding(4, 5, 4, 5);
+            tabManageBooks.Name = "tabManageBooks";
+            tabManageBooks.Size = new Size(1592, 952);
+            tabManageBooks.TabIndex = 3;
+            tabManageBooks.Text = "Управление книгами";
+            tabManageBooks.UseVisualStyleBackColor = true;
+            // 
+            // panelManageBooks
+            // 
+            panelManageBooks.Controls.Add(lblManageStatus);
+            panelManageBooks.Controls.Add(btnRefreshManage);
+            panelManageBooks.Controls.Add(btnCancelEdit);
+            panelManageBooks.Controls.Add(btnSaveBook);
+            panelManageBooks.Controls.Add(groupBoxBookDetails);
+            panelManageBooks.Controls.Add(btnEditBook);
+            panelManageBooks.Controls.Add(btnDeleteBook);
+            panelManageBooks.Controls.Add(btnAddNewBook);
+            panelManageBooks.Controls.Add(dgvManageBooks);
+            panelManageBooks.Dock = DockStyle.Fill;
+            panelManageBooks.Location = new Point(0, 0);
+            panelManageBooks.Margin = new Padding(4, 5, 4, 5);
+            panelManageBooks.Name = "panelManageBooks";
+            panelManageBooks.Size = new Size(1592, 952);
+            panelManageBooks.TabIndex = 0;
+            // 
+            // lblManageStatus
+            // 
+            lblManageStatus.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            lblManageStatus.ForeColor = Color.Green;
+            lblManageStatus.Location = new Point(880, 23);
+            lblManageStatus.Margin = new Padding(4, 0, 4, 0);
+            lblManageStatus.Name = "lblManageStatus";
+            lblManageStatus.Size = new Size(400, 38);
+            lblManageStatus.TabIndex = 8;
+            lblManageStatus.Text = "Готов к работе";
+            lblManageStatus.TextAlign = ContentAlignment.MiddleLeft;
+            // 
+            // btnRefreshManage
+            // 
+            btnRefreshManage.Location = new Point(720, 23);
+            btnRefreshManage.Margin = new Padding(4, 5, 4, 5);
+            btnRefreshManage.Name = "btnRefreshManage";
+            btnRefreshManage.Size = new Size(153, 38);
+            btnRefreshManage.TabIndex = 7;
+            btnRefreshManage.Text = "Обновить";
+            btnRefreshManage.UseVisualStyleBackColor = true;
+            btnRefreshManage.Click += btnRefreshManage_Click;
+            // 
+            // btnCancelEdit
+            // 
+            btnCancelEdit.BackColor = Color.LightGray;
+            btnCancelEdit.Enabled = false;
+            btnCancelEdit.Location = new Point(1133, 854);
+            btnCancelEdit.Margin = new Padding(4, 5, 4, 5);
+            btnCancelEdit.Name = "btnCancelEdit";
+            btnCancelEdit.Size = new Size(147, 46);
+            btnCancelEdit.TabIndex = 6;
+            btnCancelEdit.Text = "Отмена";
+            btnCancelEdit.UseVisualStyleBackColor = false;
+            btnCancelEdit.Click += btnCancelEdit_Click;
+            // 
+            // btnSaveBook
+            // 
+            btnSaveBook.BackColor = Color.FromArgb(0, 123, 255);
+            btnSaveBook.Enabled = false;
+            btnSaveBook.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            btnSaveBook.ForeColor = Color.White;
+            btnSaveBook.Location = new Point(977, 854);
+            btnSaveBook.Margin = new Padding(4, 5, 4, 5);
+            btnSaveBook.Name = "btnSaveBook";
+            btnSaveBook.Size = new Size(147, 46);
+            btnSaveBook.TabIndex = 5;
+            btnSaveBook.Text = "Сохранить";
+            btnSaveBook.UseVisualStyleBackColor = false;
+            btnSaveBook.Click += btnSaveBook_Click;
+            // 
+            // groupBoxBookDetails
+            // 
+            groupBoxBookDetails.Controls.Add(numStockQuantity);
+            groupBoxBookDetails.Controls.Add(label10);
+            groupBoxBookDetails.Controls.Add(txtBookGenre);
+            groupBoxBookDetails.Controls.Add(label9);
+            groupBoxBookDetails.Controls.Add(numPublishedYear);
+            groupBoxBookDetails.Controls.Add(label8);
+            groupBoxBookDetails.Controls.Add(cmbBookAuthor);
+            groupBoxBookDetails.Controls.Add(label7);
+            groupBoxBookDetails.Controls.Add(numBookPrice);
+            groupBoxBookDetails.Controls.Add(label6);
+            groupBoxBookDetails.Controls.Add(txtBookTitle);
+            groupBoxBookDetails.Controls.Add(label5);
+            groupBoxBookDetails.Enabled = false;
+            groupBoxBookDetails.Location = new Point(977, 62);
+            groupBoxBookDetails.Margin = new Padding(4, 5, 4, 5);
+            groupBoxBookDetails.Name = "groupBoxBookDetails";
+            groupBoxBookDetails.Padding = new Padding(4, 5, 4, 5);
+            groupBoxBookDetails.Size = new Size(600, 782);
+            groupBoxBookDetails.TabIndex = 4;
+            groupBoxBookDetails.TabStop = false;
+            groupBoxBookDetails.Text = "Данные книги";
+            // 
+            // numStockQuantity
+            // 
+            numStockQuantity.Location = new Point(200, 425);
+            numStockQuantity.Margin = new Padding(4, 5, 4, 5);
+            numStockQuantity.Maximum = new decimal(new int[] { 10000, 0, 0, 0 });
+            numStockQuantity.Minimum = new decimal(new int[] { 1, 0, 0, 0 });
+            numStockQuantity.Name = "numStockQuantity";
+            numStockQuantity.Size = new Size(373, 27);
+            numStockQuantity.TabIndex = 11;
+            numStockQuantity.Value = new decimal(new int[] { 1, 0, 0, 0 });
+            // 
+            // label10
+            // 
+            label10.AutoSize = true;
+            label10.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            label10.Location = new Point(23, 428);
+            label10.Margin = new Padding(4, 0, 4, 0);
+            label10.Name = "label10";
+            label10.Size = new Size(155, 18);
+            label10.TabIndex = 10;
+            label10.Text = "Количество на складе:";
+            // 
+            // txtBookGenre
+            // 
+            txtBookGenre.Location = new Point(200, 362);
+            txtBookGenre.Margin = new Padding(4, 5, 4, 5);
+            txtBookGenre.Name = "txtBookGenre";
+            txtBookGenre.Size = new Size(373, 27);
+            txtBookGenre.TabIndex = 9;
+            // 
+            // label9
+            // 
+            label9.AutoSize = true;
+            label9.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            label9.Location = new Point(23, 365);
+            label9.Margin = new Padding(4, 0, 4, 0);
+            label9.Name = "label9";
+            label9.Size = new Size(54, 18);
+            label9.TabIndex = 8;
+            label9.Text = "Жанр:";
+            // 
+            // numPublishedYear
+            // 
+            numPublishedYear.Location = new Point(200, 298);
+            numPublishedYear.Margin = new Padding(4, 5, 4, 5);
+            numPublishedYear.Maximum = new decimal(new int[] { 2100, 0, 0, 0 });
+            numPublishedYear.Minimum = new decimal(new int[] { 1800, 0, 0, 0 });
+            numPublishedYear.Name = "numPublishedYear";
+            numPublishedYear.Size = new Size(373, 27);
+            numPublishedYear.TabIndex = 7;
+            numPublishedYear.Value = new decimal(new int[] { 2024, 0, 0, 0 });
+            // 
+            // label8
+            // 
+            label8.AutoSize = true;
+            label8.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            label8.Location = new Point(23, 301);
+            label8.Margin = new Padding(4, 0, 4, 0);
+            label8.Name = "label8";
+            label8.Size = new Size(112, 18);
+            label8.TabIndex = 6;
+            label8.Text = "Год издания:";
+            // 
+            // cmbBookAuthor
+            // 
+            cmbBookAuthor.FormattingEnabled = true;
+            cmbBookAuthor.Location = new Point(200, 233);
+            cmbBookAuthor.Margin = new Padding(4, 5, 4, 5);
+            cmbBookAuthor.Name = "cmbBookAuthor";
+            cmbBookAuthor.Size = new Size(373, 28);
+            cmbBookAuthor.TabIndex = 5;
+            // 
+            // label7
+            // 
+            label7.AutoSize = true;
+            label7.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            label7.Location = new Point(23, 236);
+            label7.Margin = new Padding(4, 0, 4, 0);
+            label7.Name = "label7";
+            label7.Size = new Size(55, 18);
+            label7.TabIndex = 4;
+            label7.Text = "Автор:";
+            // 
+            // numBookPrice
+            // 
+            numBookPrice.DecimalPlaces = 2;
+            numBookPrice.Increment = new decimal(new int[] { 100, 0, 0, 0 });
+            numBookPrice.Location = new Point(200, 170);
+            numBookPrice.Margin = new Padding(4, 5, 4, 5);
+            numBookPrice.Maximum = new decimal(new int[] { 1000000, 0, 0, 0 });
+            numBookPrice.Name = "numBookPrice";
+            numBookPrice.Size = new Size(373, 27);
+            numBookPrice.TabIndex = 3;
+            // 
+            // label6
+            // 
+            label6.AutoSize = true;
+            label6.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            label6.Location = new Point(23, 173);
+            label6.Margin = new Padding(4, 0, 4, 0);
+            label6.Name = "label6";
+            label6.Size = new Size(51, 18);
+            label6.TabIndex = 2;
+            label6.Text = "Цена:";
+            // 
+            // txtBookTitle
+            // 
+            txtBookTitle.Location = new Point(200, 105);
+            txtBookTitle.Margin = new Padding(4, 5, 4, 5);
+            txtBookTitle.Name = "txtBookTitle";
+            txtBookTitle.Size = new Size(373, 27);
+            txtBookTitle.TabIndex = 1;
+            // 
+            // label5
+            // 
+            label5.AutoSize = true;
+            label5.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            label5.Location = new Point(23, 108);
+            label5.Margin = new Padding(4, 0, 4, 0);
+            label5.Name = "label5";
+            label5.Size = new Size(168, 18);
+            label5.TabIndex = 0;
+            label5.Text = "Название книги *:";
+            // 
+            // btnEditBook
+            // 
+            btnEditBook.BackColor = Color.FromArgb(255, 193, 7);
+            btnEditBook.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            btnEditBook.Location = new Point(187, 23);
+            btnEditBook.Margin = new Padding(4, 5, 4, 5);
+            btnEditBook.Name = "btnEditBook";
+            btnEditBook.Size = new Size(160, 38);
+            btnEditBook.TabIndex = 3;
+            btnEditBook.Text = "Редактировать";
+            btnEditBook.UseVisualStyleBackColor = false;
+            btnEditBook.Click += btnEditBook_Click;
+            // 
+            // btnDeleteBook
+            // 
+            btnDeleteBook.BackColor = Color.FromArgb(220, 53, 69);
+            btnDeleteBook.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            btnDeleteBook.ForeColor = Color.White;
+            btnDeleteBook.Location = new Point(357, 23);
+            btnDeleteBook.Margin = new Padding(4, 5, 4, 5);
+            btnDeleteBook.Name = "btnDeleteBook";
+            btnDeleteBook.Size = new Size(160, 38);
+            btnDeleteBook.TabIndex = 2;
+            btnDeleteBook.Text = "Удалить";
+            btnDeleteBook.UseVisualStyleBackColor = false;
+            btnDeleteBook.Click += btnDeleteBook_Click;
+            // 
+            // btnAddNewBook
+            // 
+            btnAddNewBook.BackColor = Color.FromArgb(40, 167, 69);
+            btnAddNewBook.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold);
+            btnAddNewBook.ForeColor = Color.White;
+            btnAddNewBook.Location = new Point(17, 23);
+            btnAddNewBook.Margin = new Padding(4, 5, 4, 5);
+            btnAddNewBook.Name = "btnAddNewBook";
+            btnAddNewBook.Size = new Size(160, 38);
+            btnAddNewBook.TabIndex = 1;
+            btnAddNewBook.Text = "Добавить книгу";
+            btnAddNewBook.UseVisualStyleBackColor = false;
+            btnAddNewBook.Click += btnAddNewBook_Click;
+            // 
+            // dgvManageBooks
+            // 
+            dgvManageBooks.AllowUserToAddRows = false;
+            dgvManageBooks.AllowUserToDeleteRows = false;
+            dgvManageBooks.AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill;
+            dgvManageBooks.ColumnHeadersHeightSizeMode = DataGridViewColumnHeadersHeightSizeMode.AutoSize;
+            dgvManageBooks.Location = new Point(17, 62);
+            dgvManageBooks.Margin = new Padding(4, 5, 4, 5);
+            dgvManageBooks.Name = "dgvManageBooks";
+            dgvManageBooks.ReadOnly = true;
+            dgvManageBooks.RowHeadersVisible = false;
+            dgvManageBooks.RowHeadersWidth = 51;
+            dgvManageBooks.SelectionMode = DataGridViewSelectionMode.FullRowSelect;
+            dgvManageBooks.Size = new Size(940, 838);
+            dgvManageBooks.TabIndex = 0;
+            dgvManageBooks.SelectionChanged += dgvManageBooks_SelectionChanged;
+            // 
+            // lblCurrentUser
+            // 
+            lblCurrentUser.BackColor = Color.LightGray;
+            lblCurrentUser.Dock = DockStyle.Top;
+            lblCurrentUser.Font = new System.Drawing.Font("Microsoft Sans Serif", 9F, FontStyle.Bold, GraphicsUnit.Point, 204);
+            lblCurrentUser.Location = new Point(0, 0);
+            lblCurrentUser.Margin = new Padding(4, 0, 4, 0);
+            lblCurrentUser.Name = "lblCurrentUser";
+            lblCurrentUser.Size = new Size(1600, 46);
+            lblCurrentUser.TabIndex = 1;
+            lblCurrentUser.Text = "Покупатель: не выбран";
+            lblCurrentUser.TextAlign = ContentAlignment.MiddleCenter;
+            // 
+            // MainForm
+            // 
+            AutoScaleDimensions = new SizeF(8F, 20F);
+            AutoScaleMode = AutoScaleMode.Font;
+            ClientSize = new Size(1600, 1031);
+            Controls.Add(tabControl);
+            Controls.Add(lblCurrentUser);
+            Margin = new Padding(4, 5, 4, 5);
+            MinimumSize = new Size(1615, 1028);
+            Name = "MainForm";
+            StartPosition = FormStartPosition.CenterScreen;
+            Text = "Книжный магазин - Интернет-магазин";
+            tabControl.ResumeLayout(false);
+            tabCatalog.ResumeLayout(false);
+            tabCatalog.PerformLayout();
+            panel1.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)dgvCart).EndInit();
+            ((System.ComponentModel.ISupportInitialize)dgvBooks).EndInit();
+            tabMyOrders.ResumeLayout(false);
+            ((System.ComponentModel.ISupportInitialize)dgvOrderDetails).EndInit();
+            ((System.ComponentModel.ISupportInitialize)dgvOrders).EndInit();
+            tabProcedures.ResumeLayout(false);
+            tabProcedures.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)numMinPrice).EndInit();
+            ((System.ComponentModel.ISupportInitialize)dgvAuthorSearch).EndInit();
+            tabManageBooks.ResumeLayout(false);
+            panelManageBooks.ResumeLayout(false);
+            groupBoxBookDetails.ResumeLayout(false);
+            groupBoxBookDetails.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)numStockQuantity).EndInit();
+            ((System.ComponentModel.ISupportInitialize)numPublishedYear).EndInit();
+            ((System.ComponentModel.ISupportInitialize)numBookPrice).EndInit();
+            ((System.ComponentModel.ISupportInitialize)dgvManageBooks).EndInit();
+            ResumeLayout(false);
+        }
+    }
+}
+
+User.cs
+using System;
+using System.Collections.Generic;
+
+namespace BookStore.DAL.Models;
+
+public partial class User
+{
+    public int Id { get; set; }
+
+    public string FullName { get; set; } = null!;
+
+    public string Phone { get; set; } = null!;
+
+    public string? Email { get; set; }
+
+    public string? Address { get; set; }
+
+    public DateTime? CreatedAt { get; set; }
+
+    public virtual ICollection<Order> Orders { get; set; } = new List<Order>();
+}
+
+OrderItem.cs
+using System;
+using System.Collections.Generic;
+
+namespace BookStore.DAL.Models;
+
+public partial class OrderItem
+{
+    public int Id { get; set; }
+
+    public int? OrderId { get; set; }
+
+    public int? BookId { get; set; }
+
+    public int Quantity { get; set; }
+
+    public decimal UnitPrice { get; set; }
+
+    public decimal? Subtotal { get; set; }
+
+    public DateTime? CreatedAt { get; set; }
+
+    public virtual Book? Book { get; set; }
+
+    public virtual Order? Order { get; set; }
+}
+
+Order.cs
+using System;
+using System.Collections.Generic;
+
+namespace BookStore.DAL.Models;
+
+public partial class Order
+{
+    public int Id { get; set; }
+
+    public int? UserId { get; set; }
+
+    public DateOnly OrderDate { get; set; }
+
+    public TimeOnly OrderTime { get; set; }
+
+    public decimal TotalAmount { get; set; }
+
+    public string? Status { get; set; }
+
+    public DateTime? CreatedAt { get; set; }
+
+    public virtual ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+
+    public virtual User? User { get; set; }
+}
+
+BookstoreContext.cs
+using System;
+using System.Collections.Generic;
+using Microsoft.EntityFrameworkCore;
+
+namespace BookStore.DAL.Models;
+
+public partial class BookstoreContext : DbContext
+{
+    public BookstoreContext()
+    {
+    }
+
+    public BookstoreContext(DbContextOptions<BookstoreContext> options)
+        : base(options)
+    {
+    }
+
+    public virtual DbSet<Author> Authors { get; set; }
+
+    public virtual DbSet<Book> Books { get; set; }
+
+    public virtual DbSet<Order> Orders { get; set; }
+
+    public virtual DbSet<OrderItem> OrderItems { get; set; }
+
+    public virtual DbSet<User> Users { get; set; }
+
+    protected override void OnConfiguring(DbContextOptionsBuilder optionsBuilder)
+#warning To protect potentially sensitive information in your connection string, you should move it out of source code. You can avoid scaffolding the connection string by using the Name= syntax to read it from configuration - see https://go.microsoft.com/fwlink/?linkid=2131148. For more guidance on storing connection strings, see https://go.microsoft.com/fwlink/?LinkId=723263.
+        => optionsBuilder.UseNpgsql("Server=localhost;Port=5432;Database=bookstore;User Id=postgres;Password=12345;");
+
+    protected override void OnModelCreating(ModelBuilder modelBuilder)
+    {
+        modelBuilder.Entity<Author>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("authors_pkey");
+
+            entity.ToTable("authors");
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .HasColumnType("timestamp without time zone")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Name)
+                .HasMaxLength(100)
+                .HasColumnName("name");
+        });
+
+        modelBuilder.Entity<Book>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("books_pkey");
+
+            entity.ToTable("books");
+
+            entity.HasIndex(e => e.AuthorId, "idx_books_author");
+
+            entity.HasIndex(e => e.Genre, "idx_books_genre");
+
+            entity.HasIndex(e => e.StockQuantity, "idx_books_stock");
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.AuthorId).HasColumnName("author_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .HasColumnType("timestamp without time zone")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Genre)
+                .HasMaxLength(50)
+                .HasColumnName("genre");
+            entity.Property(e => e.Price)
+                .HasPrecision(10, 2)
+                .HasColumnName("price");
+            entity.Property(e => e.Published).HasColumnName("published");
+            entity.Property(e => e.StockQuantity)
+                .HasDefaultValue(0)
+                .HasColumnName("stock_quantity");
+            entity.Property(e => e.Title)
+                .HasMaxLength(200)
+                .HasColumnName("title");
+
+            entity.HasOne(d => d.Author).WithMany(p => p.Books)
+                .HasForeignKey(d => d.AuthorId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("books_author_id_fkey");
+        });
+
+        modelBuilder.Entity<Order>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("orders_pkey");
+
+            entity.ToTable("orders");
+
+            entity.HasIndex(e => e.OrderDate, "idx_orders_date");
+
+            entity.HasIndex(e => e.UserId, "idx_orders_user");
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .HasColumnType("timestamp without time zone")
+                .HasColumnName("created_at");
+            entity.Property(e => e.OrderDate)
+                .HasDefaultValueSql("CURRENT_DATE")
+                .HasColumnName("order_date");
+            entity.Property(e => e.OrderTime)
+                .HasDefaultValueSql("CURRENT_TIME")
+                .HasColumnName("order_time");
+            entity.Property(e => e.Status)
+                .HasMaxLength(20)
+                .HasDefaultValueSql("'Новый'::character varying")
+                .HasColumnName("status");
+            entity.Property(e => e.TotalAmount)
+                .HasPrecision(10, 2)
+                .HasColumnName("total_amount");
+            entity.Property(e => e.UserId).HasColumnName("user_id");
+
+            entity.HasOne(d => d.User).WithMany(p => p.Orders)
+                .HasForeignKey(d => d.UserId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("orders_user_id_fkey");
+        });
+
+        modelBuilder.Entity<OrderItem>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("order_items_pkey");
+
+            entity.ToTable("order_items");
+
+            entity.HasIndex(e => e.BookId, "idx_order_items_book");
+
+            entity.HasIndex(e => e.OrderId, "idx_order_items_order");
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.BookId).HasColumnName("book_id");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .HasColumnType("timestamp without time zone")
+                .HasColumnName("created_at");
+            entity.Property(e => e.OrderId).HasColumnName("order_id");
+            entity.Property(e => e.Quantity).HasColumnName("quantity");
+            entity.Property(e => e.Subtotal)
+                .HasPrecision(10, 2)
+                .HasComputedColumnSql("((quantity)::numeric * unit_price)", true)
+                .HasColumnName("subtotal");
+            entity.Property(e => e.UnitPrice)
+                .HasPrecision(10, 2)
+                .HasColumnName("unit_price");
+
+            entity.HasOne(d => d.Book).WithMany(p => p.OrderItems)
+                .HasForeignKey(d => d.BookId)
+                .HasConstraintName("order_items_book_id_fkey");
+
+            entity.HasOne(d => d.Order).WithMany(p => p.OrderItems)
+                .HasForeignKey(d => d.OrderId)
+                .OnDelete(DeleteBehavior.Cascade)
+                .HasConstraintName("order_items_order_id_fkey");
+        });
+
+        modelBuilder.Entity<User>(entity =>
+        {
+            entity.HasKey(e => e.Id).HasName("users_pkey");
+
+            entity.ToTable("users");
+
+            entity.HasIndex(e => e.Phone, "users_phone_key").IsUnique();
+
+            entity.Property(e => e.Id).HasColumnName("id");
+            entity.Property(e => e.Address).HasColumnName("address");
+            entity.Property(e => e.CreatedAt)
+                .HasDefaultValueSql("CURRENT_TIMESTAMP")
+                .HasColumnType("timestamp without time zone")
+                .HasColumnName("created_at");
+            entity.Property(e => e.Email)
+                .HasMaxLength(100)
+                .HasColumnName("email");
+            entity.Property(e => e.FullName)
+                .HasMaxLength(150)
+                .HasColumnName("full_name");
+            entity.Property(e => e.Phone)
+                .HasMaxLength(20)
+                .HasColumnName("phone");
+        });
+
+        OnModelCreatingPartial(modelBuilder);
+    }
+
+    partial void OnModelCreatingPartial(ModelBuilder modelBuilder);
+}
+
+
+Book.cs
+using System;
+using System.Collections.Generic;
+
+namespace BookStore.DAL.Models;
+
+public partial class Book
+{
+    public int Id { get; set; }
+
+    public string Title { get; set; } = null!;
+
+    public decimal Price { get; set; }
+
+    public int? AuthorId { get; set; }
+
+    public DateOnly? Published { get; set; }
+
+    public string? Genre { get; set; }
+
+    public int? StockQuantity { get; set; }
+
+    public DateTime? CreatedAt { get; set; }
+
+    public virtual Author? Author { get; set; }
+
+    public virtual ICollection<OrderItem> OrderItems { get; set; } = new List<OrderItem>();
+}
+
+Author.cs
+using System;
+using System.Collections.Generic;
+
+namespace BookStore.DAL.Models;
+
+public partial class Author
+{
+    public int Id { get; set; }
+
+    public string Name { get; set; } = null!;
+
+    public DateTime? CreatedAt { get; set; }
+
+    public virtual ICollection<Book> Books { get; set; } = new List<Book>();
+}
+
+UserService.cs
+using BookStore.BLL.DTO.User;
+using BookStore.DAL.Data;
+using BookStore.DAL.Models;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace BookStore.BLL.Services
+{
+    public class UserService
+    {
+        private readonly string _connectionString;
+
+        public UserService(string connectionString)
+        {
+            _connectionString = connectionString;
+        }
+
+        public UserDto GetUserByPhone(string phone)
+        {
+            using var context = new BookstoreContext();
+
+            var user = context.Users
+                .FirstOrDefault(u => u.Phone == phone);
+
+            if (user == null) return null;
+
+            return new UserDto
+            {
+                Id = user.Id,
+                FullName = user.FullName,
+                Phone = user.Phone,
+                Email = user.Email,
+                Address = user.Address,
+                CreatedAt = user.CreatedAt
+            };
+        }
+
+        public UserDto GetUserById(int id)
+        {
+            using var context = new BookstoreContext();
+
+            var user = context.Users.Find(id);
+
+            if (user == null) return null;
+
+            return new UserDto
+            {
+                Id = user.Id,
+                FullName = user.FullName,
+                Phone = user.Phone,
+                Email = user.Email,
+                Address = user.Address,
+                CreatedAt = user.CreatedAt
+            };
+        }
+
+        public List<UserDto> GetAllUsers()
+        {
+            using var context = new BookstoreContext();
+
+            return context.Users
+                .OrderBy(u => u.FullName)
+                .Select(u => new UserDto
+                {
+                    Id = u.Id,
+                    FullName = u.FullName,
+                    Phone = u.Phone,
+                    Email = u.Email,
+                    Address = u.Address,
+                    CreatedAt = u.CreatedAt
+                })
+                .ToList();
+        }
+    }
+}
+
+OrderService.cs
+using BookStore.BLL.DTO.Order;
+using BookStore.DAL.Data;
+using BookStore.DAL.Models;
+using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace BookStore.BLL.Services
+{
+    public class OrderService
+    {
+        private readonly string _connectionString;
+
+        public OrderService(string connectionString)
+        {
+            _connectionString = connectionString;
+        }
+
+        public OrderResultDto PlaceOrder(CreateOrderDto orderDto)
+        {
+            var result = new OrderResultDto();
+
+            using var context = new BookstoreContext();
+            using var transaction = context.Database.BeginTransaction();
+
+            try
+            {
+                // 1. Проверяем пользователя
+                var user = context.Users.Find(orderDto.UserId);
+                if (user == null)
+                {
+                    result.Success = false;
+                    result.Message = "Пользователь не найден";
+                    return result;
+                }
+
+                // 2. Проверяем наличие товаров
+                foreach (var item in orderDto.Items)
+                {
+                    var book = context.Books.Find(item.BookId);
+                    if (book == null || (book.StockQuantity ?? 0) < item.Quantity)
+                    {
+                        result.Success = false;
+                        result.Message = $"Недостаточно товара: {book?.Title ?? "Неизвестная книга"}";
+                        return result;
+                    }
+                }
+
+                // 3. Создаем заказ - используем DateOnly и TimeOnly
+                var order = new Order
+                {
+                    UserId = orderDto.UserId,
+                    OrderDate = DateOnly.FromDateTime(DateTime.Now),  // Исправлено
+                    OrderTime = TimeOnly.FromDateTime(DateTime.Now),  // Исправлено
+                    TotalAmount = orderDto.Items.Sum(i => i.Price * i.Quantity),
+                    Status = "Новый",
+                    CreatedAt = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified)
+                };
+
+                context.Orders.Add(order);
+                context.SaveChanges(); // Получаем Id заказа
+
+                // 4. Добавляем позиции заказа и обновляем остатки
+                foreach (var item in orderDto.Items)
+                {
+                    var orderItem = new OrderItem
+                    {
+                        OrderId = order.Id,
+                        BookId = item.BookId,
+                        Quantity = item.Quantity,
+                        UnitPrice = item.Price,
+                        Subtotal = item.Price * item.Quantity
+                    };
+
+                    context.OrderItems.Add(orderItem);
+
+                    // Обновляем остаток на складе
+                    var book = context.Books.Find(item.BookId);
+                    if (book != null)
+                    {
+                        book.StockQuantity = (book.StockQuantity ?? 0) - item.Quantity;
+                        if (book.StockQuantity < 0) book.StockQuantity = 0;
+                    }
+                }
+
+                context.SaveChanges();
+                transaction.Commit();
+
+                result.Success = true;
+                result.OrderId = order.Id;
+                result.OrderNumber = $"ORD-{order.Id:000000}";
+                result.TotalAmount = order.TotalAmount;
+                result.Message = $"Заказ №{order.Id} успешно оформлен!";
+            }
+            catch (Exception ex)
+            {
+                transaction.Rollback();
+                result.Success = false;
+                result.Message = $"Ошибка при оформлении заказа: {ex.Message} Inner: {ex.InnerException?.Message}";
+            }
+
+                return result;
+        }
+
+        public List<OrderDto> GetUserOrders(int userId)
+        {
+            using var context = new BookstoreContext();
+
+            var orders = context.Orders
+                .Include(o => o.User)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Book)
+                        .ThenInclude(b => b.Author)
+                .Where(o => o.UserId == userId)
+                .OrderByDescending(o => o.OrderDate)
+                .ThenByDescending(o => o.OrderTime)
+                .ToList();
+
+            return orders.Select(o => new OrderDto
+            {
+                Id = o.Id,
+                UserId = o.UserId,
+                UserName = o.User?.FullName ?? "Неизвестный",
+                OrderDate = o.OrderDate,
+                OrderTime = o.OrderTime,
+                TotalAmount = o.TotalAmount,
+                Status = o.Status ?? "Новый",
+                CreatedAt = o.CreatedAt,
+                Items = o.OrderItems.Select(oi => new OrderItemDto
+                {
+                    BookId = oi.BookId ?? 0,
+                    BookTitle = oi.Book?.Title ?? "Неизвестная книга",
+                    AuthorName = oi.Book?.Author?.Name ?? "Неизвестный автор",
+                    Quantity = oi.Quantity,
+                    UnitPrice = oi.UnitPrice,
+                    Subtotal = oi.Subtotal
+                }).ToList()
+            }).ToList();
+        }
+
+        public OrderDto? GetOrderById(int orderId)
+        {
+            using var context = new BookstoreContext();
+
+            var order = context.Orders
+                .Include(o => o.User)
+                .Include(o => o.OrderItems)
+                    .ThenInclude(oi => oi.Book)
+                        .ThenInclude(b => b.Author)
+                .FirstOrDefault(o => o.Id == orderId);
+
+            if (order == null) return null;
+
+            return new OrderDto
+            {
+                Id = order.Id,
+                UserId = order.UserId,
+                UserName = order.User?.FullName ?? "Неизвестный",
+                OrderDate = order.OrderDate,
+                OrderTime = order.OrderTime,
+                TotalAmount = order.TotalAmount,
+                Status = order.Status ?? "Новый",
+                CreatedAt = order.CreatedAt,
+                Items = order.OrderItems.Select(oi => new OrderItemDto
+                {
+                    BookId = oi.BookId ?? 0,
+                    BookTitle = oi.Book?.Title ?? "Неизвестная книга",
+                    AuthorName = oi.Book?.Author?.Name ?? "Неизвестный автор",
+                    Quantity = oi.Quantity,
+                    UnitPrice = oi.UnitPrice,
+                    Subtotal = oi.Subtotal
+                }).ToList()
+            };
+        }
+
+        public bool CancelOrder(int orderId)
+        {
+            using var context = new BookstoreContext();
+            using var transaction = context.Database.BeginTransaction();
+
+            try
+            {
+                var order = context.Orders
+                    .Include(o => o.OrderItems)
+                    .FirstOrDefault(o => o.Id == orderId);
+
+                if (order == null) return false;
+
+                // Возвращаем товары на склад
+                foreach (var item in order.OrderItems)
+                {
+                    var book = context.Books.Find(item.BookId);
+                    if (book != null)
+                    {
+                        book.StockQuantity = (book.StockQuantity ?? 0) + item.Quantity;
+                    }
+                }
+
+                order.Status = "Отменен";
+                context.SaveChanges();
+                transaction.Commit();
+
+                return true;
+            }
+            catch
+            {
+                transaction.Rollback();
+                return false;
+            }
+        }
+    }
+}
+
+BookService.cs
+using BookStore.BLL.DTO.Book;
+using BookStore.DAL.Data;
+using BookStore.DAL.Models;
+using Microsoft.EntityFrameworkCore;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
+namespace BookStore.BLL.Services
+{
+    public class BookService
+    {
+        private readonly string _connectionString;
+
+        public BookService(string connectionString)
+        {
+            _connectionString = connectionString;
+        }
+
+        public List<BookDto> GetAllBooks()
+        {
+            using var context = new BookstoreContext();
+
+            var books = context.Books
+                .Include(b => b.Author)
+                .OrderBy(b => b.Title)
+                .ToList();
+
+            return books.Select(book => new BookDto
+            {
+                Id = book.Id,
+                Title = book.Title,
+                AuthorName = book.Author?.Name ?? "Неизвестный",
+                AuthorId = book.AuthorId,
+                Price = book.Price,
+                Genre = book.Genre,
+                PublishedYear = book.Published?.Year ?? 0,  // Исправлено для DateOnly?
+                StockQuantity = book.StockQuantity,
+                Availability = (book.StockQuantity ?? 0) > 0 ? "В наличии" : "Нет в наличии",
+                CreatedAt = book.CreatedAt
+            }).ToList();
+        }
+
+        public BookDto? GetBookById(int id)
+        {
+            using var context = new BookstoreContext();
+
+            var book = context.Books
+                .Include(b => b.Author)
+                .FirstOrDefault(b => b.Id == id);
+
+            if (book == null) return null;
+
+            return new BookDto
+            {
+                Id = book.Id,
+                Title = book.Title,
+                AuthorName = book.Author?.Name ?? "Неизвестный",
+                AuthorId = book.AuthorId,
+                Price = book.Price,
+                Genre = book.Genre,
+                PublishedYear = book.Published?.Year ?? 0,  // Исправлено для DateOnly?
+                StockQuantity = book.StockQuantity,
+                Availability = (book.StockQuantity ?? 0) > 0 ? "В наличии" : "Нет в наличии",
+                CreatedAt = book.CreatedAt
+            };
+        }
+
+        public List<string> GetAllGenres()
+        {
+            using var context = new BookstoreContext();
+
+            return context.Books
+                .Where(b => !string.IsNullOrEmpty(b.Genre))
+                .Select(b => b.Genre!)
+                .Distinct()
+                .OrderBy(g => g)
+                .ToList();
+        }
+
+        public List<string> GetAllAuthors()
+        {
+            using var context = new BookstoreContext();
+
+            return context.Authors
+                .Select(a => a.Name)
+                .Distinct()
+                .OrderBy(a => a)
+                .ToList();
+        }
+
+        public List<BookDto> SearchBooks(string? title = null, string? author = null, string? genre = null)
+        {
+            using var context = new BookstoreContext();
+
+            var query = context.Books
+                .Include(b => b.Author)
+                .AsQueryable();
+
+            if (!string.IsNullOrEmpty(title))
+                query = query.Where(b => b.Title.Contains(title));
+
+            if (!string.IsNullOrEmpty(author))
+                query = query.Where(b => b.Author != null && b.Author.Name.Contains(author));
+
+            if (!string.IsNullOrEmpty(genre))
+                query = query.Where(b => b.Genre != null && b.Genre.Contains(genre));
+
+            return query
+                .OrderBy(b => b.Title)
+                .Select(book => new BookDto
+                {
+                    Id = book.Id,
+                    Title = book.Title,
+                    AuthorName = book.Author != null ? book.Author.Name : "Неизвестный",
+                    AuthorId = book.AuthorId,
+                    Price = book.Price,
+                    Genre = book.Genre,
+                    PublishedYear = book.Published.HasValue ? book.Published.Value.Year : 0,  // Исправлено
+                    StockQuantity = book.StockQuantity,
+                    Availability = (book.StockQuantity ?? 0) > 0 ? "В наличии" : "Нет в наличии",
+                    CreatedAt = book.CreatedAt
+                })
+                .ToList();
+        }
+
+        public bool UpdateStockQuantity(int bookId, int quantityChange)
+        {
+            using var context = new BookstoreContext();
+
+            var book = context.Books.Find(bookId);
+            if (book == null) return false;
+
+            book.StockQuantity = (book.StockQuantity ?? 0) + quantityChange;
+            if (book.StockQuantity < 0) book.StockQuantity = 0;
+
+            context.SaveChanges();
+            return true;
+        }
+
+        public bool CheckAvailability(int bookId, int quantity)
+        {
+            using var context = new BookstoreContext();
+
+            var book = context.Books.Find(bookId);
+            return book != null && (book.StockQuantity ?? 0) >= quantity;
+        }
+
+        public BookDto AddBook(BookCreateDto bookDto)
+        {
+            using var context = new BookstoreContext();
+
+            // Находим или создаем автора
+            var author = context.Authors
+                .FirstOrDefault(a => a.Name == bookDto.AuthorName);
+
+            if (author == null)
+            {
+                author = new Author { Name = bookDto.AuthorName };
+                context.Authors.Add(author);
+                context.SaveChanges();
+            }
+
+            // Создаем книгу - используем DateOnly для поля Published
+            var book = new Book
+            {
+                Title = bookDto.Title,
+                AuthorId = author.Id,
+                Price = bookDto.Price,
+                Genre = bookDto.Genre,
+                Published = new DateOnly(bookDto.PublishedYear, 1, 1),  // Исправлено
+                StockQuantity = bookDto.StockQuantity,
+                CreatedAt = DateTime.SpecifyKind(DateTime.UtcNow, DateTimeKind.Unspecified)
+            };
+
+            context.Books.Add(book);
+            context.SaveChanges();
+
+            return GetBookById(book.Id)!;
+        }
+
+        public BookDto UpdateBook(BookUpdateDto bookDto)
+        {
+            using var context = new BookstoreContext();
+
+            var book = context.Books.Find(bookDto.Id);
+            if (book == null)
+                throw new ArgumentException($"Книга с ID {bookDto.Id} не найдена");
+
+            // Обновляем автора при необходимости
+            var author = context.Authors
+                .FirstOrDefault(a => a.Name == bookDto.AuthorName);
+
+            if (author == null)
+            {
+                author = new Author { Name = bookDto.AuthorName };
+                context.Authors.Add(author);
+                context.SaveChanges();
+            }
+
+            book.Title = bookDto.Title;
+            book.AuthorId = author.Id;
+            book.Price = bookDto.Price;
+            book.Genre = bookDto.Genre;
+            book.Published = new DateOnly(bookDto.PublishedYear, 1, 1);  // Исправлено
+            book.StockQuantity = bookDto.StockQuantity;
+
+            context.SaveChanges();
+            return GetBookById(book.Id)!;
+        }
+
+        public bool DeleteBook(int id)
+        {
+            using var context = new BookstoreContext();
+
+            var book = context.Books.Find(id);
+            if (book == null) return false;
+
+            context.Books.Remove(book);
+            context.SaveChanges();
+            return true;
+        }
+    }
+}
+
+OrderResultDto.cs
+namespace BookStore.BLL.DTO.Order
+{
+    public class OrderResultDto
+    {
+        public bool Success { get; set; }
+        public string Message { get; set; } = string.Empty;
+        public int OrderId { get; set; }
+        public string OrderNumber { get; set; } = string.Empty;
+        public decimal TotalAmount { get; set; }
+    }
+}
+
+OrderItemDto.cs
+namespace BookStore.BLL.DTO.Order
+{
+    public class OrderItemDto
+    {
+        public int BookId { get; set; }
+        public string BookTitle { get; set; } = string.Empty;
+        public string AuthorName { get; set; } = string.Empty;
+        public int Quantity { get; set; }
+        public decimal UnitPrice { get; set; }
+        public decimal? Subtotal { get; set; }
+    }
+}
+
+OrderDto.cs
+using System;
+using System.Collections.Generic;
+
+namespace BookStore.BLL.DTO.Order
+{
+    public class OrderDto
+    {
+        public int Id { get; set; }
+        public int? UserId { get; set; }  // Может быть nullable
+        public string UserName { get; set; } = string.Empty;
+        public string OrderNumber { get; set; } = string.Empty;
+        public DateOnly OrderDate { get; set; }
+        public TimeOnly OrderTime { get; set; }
+        public decimal TotalAmount { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public DateTime? CreatedAt { get; set; }
+        public List<OrderItemDto> Items { get; set; } = new();
+    }
+}
+
+CreateOrderDto.cs
+using System.Collections.Generic;
+
+namespace BookStore.BLL.DTO.Order
+{
+    public class CreateOrderDto
+    {
+        public int UserId { get; set; }
+        public List<OrderItemCreateDto> Items { get; set; } = new();
+    }
+    public class OrderItemCreateDto
+    {
+        public int BookId { get; set; }
+        public int Quantity { get; set; }
+        public decimal Price { get; set; }
+    }
+}
+
+BookUpdateDto.cs
+namespace BookStore.BLL.DTO.Book
+{
+    public class BookUpdateDto
+    {
+        public int Id { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string AuthorName { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public string? Genre { get; set; }
+        public int PublishedYear { get; set; }
+        public int StockQuantity { get; set; }
+    }
+}
+
+BookDto.cs
+Ausing System;
+
+namespace BookStore.BLL.DTO.Book
+{
+    public class BookDto
+    {
+        public int Id { get; set; }
+        public string Title { get; set; } = string.Empty;
+        public string AuthorName { get; set; } = string.Empty;
+        public int? AuthorId { get; set; }  // Может быть nullable
+        public decimal Price { get; set; }
+        public string? Genre { get; set; }
+        public int PublishedYear { get; set; }
+        public int? StockQuantity { get; set; }  // Может быть nullable
+        public string Availability { get; set; } = string.Empty;
+        public DateTime? CreatedAt { get; set; }
+
+        public bool IsAvailable => (StockQuantity ?? 0) > 0;
+    }
+}
+
+BookCreateDto.cs
+namespace BookStore.BLL.DTO.Book
+{
+    public class BookCreateDto
+    {
+        public string Title { get; set; } = string.Empty;
+        public string AuthorName { get; set; } = string.Empty;
+        public decimal Price { get; set; }
+        public string? Genre { get; set; }
+        public int PublishedYear { get; set; }
+        public int StockQuantity { get; set; } = 1;
+    }
+}
+
+
+
+
+ 
+
+		
